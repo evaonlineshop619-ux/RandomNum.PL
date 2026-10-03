@@ -74,11 +74,18 @@ export const NumberGeneratorScreen: React.FC<NumberGeneratorScreenProps> = ({
   const [manualSuccessMsg, setManualSuccessMsg] = useState<string | null>(null);
   const ownTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Clean up timer on unmount
+  // Continuous run until click stop state & timer
+  const [isContinuousRolling, setIsContinuousRolling] = useState<boolean>(false);
+  const continuousTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clean up timers on unmount
   useEffect(() => {
     return () => {
       if (ownTimerRef.current) {
         clearInterval(ownTimerRef.current);
+      }
+      if (continuousTimerRef.current) {
+        clearInterval(continuousTimerRef.current);
       }
     };
   }, []);
@@ -168,9 +175,152 @@ export const NumberGeneratorScreen: React.FC<NumberGeneratorScreenProps> = ({
     };
   }, [ownNumbersText]);
 
-  // Main Sample Function
+  // Finalize sample: compute true quantum RNG, deduplicate, format, and audit log
+  const finalizeSample = useCallback(async (minVal: number, maxVal: number) => {
+    let finalVals: number[] = [];
+    const span = Math.abs(maxVal - minVal) + 1;
+    const canDeduplicate = noDuplicates && (numberFormat === 'float' || drawCount <= span);
+
+    if (canDeduplicate) {
+      const pickedSet = new Set<number>();
+      let attempts = 0;
+      while (pickedSet.size < drawCount && attempts < 2000) {
+        attempts++;
+        const val = numberFormat === 'float'
+          ? sampleCryptographicFloat(minVal, maxVal, 2)
+          : sampleCryptographicInt(minVal, maxVal);
+        pickedSet.add(val);
+      }
+      finalVals = Array.from(pickedSet);
+      while (finalVals.length < drawCount) {
+        finalVals.push(sampleCryptographicInt(minVal, maxVal));
+      }
+    } else {
+      for (let i = 0; i < drawCount; i++) {
+        if (numberFormat === 'float') {
+          finalVals.push(sampleCryptographicFloat(minVal, maxVal, 2));
+        } else {
+          finalVals.push(sampleCryptographicInt(minVal, maxVal));
+        }
+      }
+    }
+
+    if (sortResults && finalVals.length > 1) {
+      finalVals.sort((a, b) => a - b);
+    }
+
+    setCurrentValues(finalVals);
+    if (finalVals.length === 1) {
+      setDisplayString(finalVals[0].toString());
+    } else {
+      setDisplayString(finalVals.join('  '));
+    }
+
+    const randomLatency = Number((1.2 + Math.random() * 0.5).toFixed(1));
+    const randomCoherence = Number((99.7 + Math.random() * 0.2).toFixed(1));
+    setLatencyMs(randomLatency);
+    setCoherence(randomCoherence);
+    setPulseTrigger(p => p + 1);
+
+    if (audioEnabled) {
+      playQuantumSnap(580);
+    }
+
+    const now = new Date();
+    const timeStr = now.toTimeString().split(' ')[0];
+    const nextIndex = (rolls[0]?.index || 0) + 1;
+    const { shortHash, fullHash } = await calculateAuditHash(
+      nextIndex,
+      finalVals,
+      minVal,
+      maxVal,
+      timeStr,
+      randomCoherence
+    );
+
+    const newEntry: RollEntry = {
+      id: `roll-${Date.now()}-${Math.random()}`,
+      index: nextIndex,
+      value: finalVals.length === 1 ? finalVals[0] : finalVals,
+      range: `${minVal}-${maxVal}`,
+      min: minVal,
+      max: maxVal,
+      timestamp: timeStr,
+      dateObj: now,
+      hash: shortHash,
+      fullHash: fullHash,
+      coherence: randomCoherence,
+      entropyEstimate: 7.994,
+      latencyMs: randomLatency,
+    };
+
+    setRolls(prev => [newEntry, ...prev]);
+    setIsRolling(false);
+    setIsContinuousRolling(false);
+  }, [drawCount, noDuplicates, numberFormat, sortResults, audioEnabled, rolls]);
+
+  // Continuous run until click stop handler
+  const handleToggleContinuousRoll = useCallback(() => {
+    if (isContinuousRolling) {
+      // STOP: Halt continuous running and lock on final true quantum random choice
+      if (continuousTimerRef.current) {
+        clearInterval(continuousTimerRef.current);
+        continuousTimerRef.current = null;
+      }
+      const min = Math.min(lowerBound, upperBound);
+      const max = Math.max(lowerBound, upperBound);
+      finalizeSample(min, max);
+    } else {
+      // START: Begin continuous running until user clicks stop
+      setIsContinuousRolling(true);
+      setIsRolling(true);
+
+      const min = Math.min(lowerBound, upperBound);
+      const max = Math.max(lowerBound, upperBound);
+
+      if (audioEnabled) {
+        playQuantumTick(840);
+      }
+
+      let step = 0;
+      continuousTimerRef.current = setInterval(() => {
+        step++;
+        const tempVals: number[] = [];
+        for (let i = 0; i < drawCount; i++) {
+          tempVals.push(
+            numberFormat === 'float'
+              ? sampleCryptographicFloat(min, max, 2)
+              : sampleCryptographicInt(min, max)
+          );
+        }
+        if (tempVals.length === 1) {
+          setDisplayString(tempVals[0].toString());
+        } else {
+          setDisplayString(tempVals.join(' , '));
+        }
+
+        if (step % 2 === 0) {
+          setPulseTrigger(p => p + 1);
+        }
+
+        if (audioEnabled && step % 4 === 0) {
+          playQuantumTick(680 + (step % 8) * 30);
+        }
+      }, 35);
+    }
+  }, [
+    isContinuousRolling,
+    lowerBound,
+    upperBound,
+    drawCount,
+    numberFormat,
+    audioEnabled,
+    finalizeSample
+  ]);
+
+  // Instant Single Sample Function
   const sampleQuantumNumber = useCallback(async () => {
-    if (isRolling) return;
+    if (isRolling || isContinuousRolling) return;
     setIsRolling(true);
 
     const min = Math.min(lowerBound, upperBound);
@@ -206,89 +356,7 @@ export const NumberGeneratorScreen: React.FC<NumberGeneratorScreenProps> = ({
         finalizeSample(min, max);
       }
     }, intervalDuration);
-
-    const finalizeSample = async (minVal: number, maxVal: number) => {
-      let finalVals: number[] = [];
-      const span = Math.abs(maxVal - minVal) + 1;
-      const canDeduplicate = noDuplicates && (numberFormat === 'float' || drawCount <= span);
-
-      if (canDeduplicate) {
-        const pickedSet = new Set<number>();
-        let attempts = 0;
-        while (pickedSet.size < drawCount && attempts < 2000) {
-          attempts++;
-          const val = numberFormat === 'float'
-            ? sampleCryptographicFloat(minVal, maxVal, 2)
-            : sampleCryptographicInt(minVal, maxVal);
-          pickedSet.add(val);
-        }
-        finalVals = Array.from(pickedSet);
-        while (finalVals.length < drawCount) {
-          finalVals.push(sampleCryptographicInt(minVal, maxVal));
-        }
-      } else {
-        for (let i = 0; i < drawCount; i++) {
-          if (numberFormat === 'float') {
-            finalVals.push(sampleCryptographicFloat(minVal, maxVal, 2));
-          } else {
-            finalVals.push(sampleCryptographicInt(minVal, maxVal));
-          }
-        }
-      }
-
-      if (sortResults && finalVals.length > 1) {
-        finalVals.sort((a, b) => a - b);
-      }
-
-      setCurrentValues(finalVals);
-      if (finalVals.length === 1) {
-        setDisplayString(finalVals[0].toString());
-      } else {
-        setDisplayString(finalVals.join('  '));
-      }
-
-      const randomLatency = Number((1.2 + Math.random() * 0.5).toFixed(1));
-      const randomCoherence = Number((99.7 + Math.random() * 0.2).toFixed(1));
-      setLatencyMs(randomLatency);
-      setCoherence(randomCoherence);
-      setPulseTrigger(p => p + 1);
-
-      if (audioEnabled) {
-        playQuantumSnap(580);
-      }
-
-      const now = new Date();
-      const timeStr = now.toTimeString().split(' ')[0];
-      const nextIndex = (rolls[0]?.index || 0) + 1;
-      const { shortHash, fullHash } = await calculateAuditHash(
-        nextIndex,
-        finalVals,
-        minVal,
-        maxVal,
-        timeStr,
-        randomCoherence
-      );
-
-      const newEntry: RollEntry = {
-        id: `roll-${Date.now()}-${Math.random()}`,
-        index: nextIndex,
-        value: finalVals.length === 1 ? finalVals[0] : finalVals,
-        range: `${minVal}-${maxVal}`,
-        min: minVal,
-        max: maxVal,
-        timestamp: timeStr,
-        dateObj: now,
-        hash: shortHash,
-        fullHash: fullHash,
-        coherence: randomCoherence,
-        entropyEstimate: 7.994,
-        latencyMs: randomLatency,
-      };
-
-      setRolls(prev => [newEntry, ...prev]);
-      setIsRolling(false);
-    };
-  }, [lowerBound, upperBound, drawCount, sortResults, numberFormat, isRolling, audioEnabled, rolls]);
+  }, [lowerBound, upperBound, drawCount, isRolling, isContinuousRolling, audioEnabled, finalizeSample]);
 
   // Global spacebar listener handled via triggerCount
   const prevTriggerRef = useRef(triggerCount);
@@ -297,11 +365,11 @@ export const NumberGeneratorScreen: React.FC<NumberGeneratorScreenProps> = ({
       if (isRunningOwnRandom) {
         handleToggleRunOwnRandom();
       } else {
-        sampleQuantumNumber();
+        handleToggleContinuousRoll();
       }
       prevTriggerRef.current = triggerCount;
     }
-  }, [triggerCount, isRunningOwnRandom, sampleQuantumNumber]);
+  }, [triggerCount, isRunningOwnRandom, handleToggleContinuousRoll]);
 
   // Copy Hero value
   const handleCopyHero = () => {
@@ -666,7 +734,7 @@ export const NumberGeneratorScreen: React.FC<NumberGeneratorScreenProps> = ({
                     : displayString.length > 5
                     ? 'text-4xl sm:text-5xl'
                     : 'text-6xl sm:text-7xl'
-                } ${isRolling || isRunningOwnRandom ? 'opacity-85 scale-98 blur-[0.4px]' : 'opacity-100 scale-100 glow-text-primary'}`}
+                } ${isRolling || isRunningOwnRandom || isContinuousRolling ? 'opacity-85 scale-98 blur-[0.4px]' : 'opacity-100 scale-100 glow-text-primary'}`}
               >
                 {displayString}
               </div>
@@ -920,24 +988,60 @@ export const NumberGeneratorScreen: React.FC<NumberGeneratorScreenProps> = ({
               </div>
             </div>
 
-            {/* Massive Primary Action Button */}
+            {/* Massive Primary Action Button: Run Until Click Stop */}
             <button
-              onClick={sampleQuantumNumber}
-              disabled={isRolling}
-              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-[#8083ff] to-[#6366f1] hover:from-[#9093ff] hover:to-[#6f72f7] active:scale-[0.99] text-white font-space font-bold text-base tracking-wide flex items-center justify-center gap-2.5 shadow-[0_0_20px_rgba(99,102,241,0.4)] transition-all cursor-pointer disabled:opacity-70 group"
+              onClick={handleToggleContinuousRoll}
+              className={`w-full py-4 rounded-xl font-space font-bold text-base tracking-wide flex items-center justify-center gap-3 transition-all cursor-pointer shadow-xl active:scale-[0.99] border select-none group ${
+                isContinuousRolling
+                  ? 'bg-gradient-to-r from-[#ff3b5c] via-[#f43f5e] to-[#e11d48] hover:from-[#ff5270] hover:to-[#f43f5e] text-white shadow-[0_0_30px_rgba(244,63,94,0.65)] border-[#ff7088]/60 animate-pulse ring-2 ring-[#ff4d6d]/40'
+                  : 'bg-gradient-to-r from-[#8083ff] via-[#6e71f7] to-[#6366f1] hover:from-[#9295ff] hover:via-[#8083ff] hover:to-[#6f72f7] text-white shadow-[0_0_24px_rgba(99,102,241,0.45)] hover:shadow-[0_0_32px_rgba(128,131,255,0.65)] border-[#a5a7ff]/30'
+              }`}
             >
-              <div className="w-5 h-5 rounded bg-white/20 flex items-center justify-center group-hover:rotate-45 transition-transform duration-300">
-                <Target className="w-3.5 h-3.5 text-white" />
+              <div
+                className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all ${
+                  isContinuousRolling
+                    ? 'bg-white/25 text-white scale-110 shadow-inner'
+                    : 'bg-white/20 text-white group-hover:rotate-45 transition-transform duration-300'
+                }`}
+              >
+                {isContinuousRolling ? (
+                  <Square className="w-3.5 h-3.5 fill-current animate-pulse" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                )}
               </div>
-              <span>SAMPLE QUANTUM NUMBER (TRNG)</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/30 border border-white/20 font-mono">
-                SPACE
+              <span className="tracking-wide text-sm sm:text-base font-extrabold uppercase">
+                {isContinuousRolling ? 'CLICK TO STOP & LOCK NUMBER' : 'RUN UNTIL CLICK STOP'}
+              </span>
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded border font-mono font-bold transition-all ${
+                  isContinuousRolling
+                    ? 'bg-black/50 border-white/40 text-white animate-pulse'
+                    : 'bg-black/30 border-white/20 text-[#dae2fd]'
+                }`}
+              >
+                {isContinuousRolling ? 'STOP' : 'SPACE'}
               </span>
             </button>
+
+            {/* Run mode status & instant roll option */}
+            <div className="flex items-center justify-between text-[11px] font-mono text-[#908fa0] px-1 pt-0.5">
+              <span className="flex items-center gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${isContinuousRolling ? 'bg-[#ff4d6d] animate-ping' : 'bg-[#4edea3]'}`} />
+                {isContinuousRolling ? 'Continuous roll active...' : 'Mode: Run until click stop'}
+              </span>
+              <button
+                onClick={sampleQuantumNumber}
+                disabled={isRolling || isContinuousRolling}
+                className="hover:text-white text-[#c0c1ff] underline underline-offset-2 transition-colors cursor-pointer disabled:opacity-40"
+              >
+                or 1x instant sample
+              </button>
+            </div>
           </div>
 
           {/* Real-time Oscilloscope */}
-          <QuantumOscilloscope isRolling={isRolling || isRunningOwnRandom} pulseTrigger={pulseTrigger} />
+          <QuantumOscilloscope isRolling={isRolling || isRunningOwnRandom || isContinuousRolling} pulseTrigger={pulseTrigger} />
         </div>
 
         {/* ================= COLUMN 2: INPUT OWN NUMBERS & RANDOM DRAW (4 COLS) ================= */}
