@@ -15,6 +15,7 @@ import { CardPickerScreen } from './components/CardPickerScreen';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { PrecisionConfigModal } from './components/PrecisionConfigModal';
 import { AuditModal } from './components/AuditModal';
+import { GithubModal } from './components/GithubModal';
 import { Footer } from './components/Footer';
 import { RollEntry } from './utils/quantumRng';
 
@@ -34,6 +35,7 @@ export default function App() {
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState<boolean>(false);
   const [isConfigOpen, setIsConfigOpen] = useState<boolean>(false);
   const [isAuditOpen, setIsAuditOpen] = useState<boolean>(false);
+  const [isGithubOpen, setIsGithubOpen] = useState<boolean>(false);
   const [selectedAuditRoll, setSelectedAuditRoll] = useState<RollEntry | null>(null);
 
   // Global keyboard listener for Space / Enter fast re-roll trigger
@@ -81,6 +83,7 @@ export default function App() {
         onTriggerRoll={handleTriggerRoll}
         onOpenConfig={() => setIsConfigOpen(true)}
         onOpenAudit={() => setIsDiagnosticsOpen(true)}
+        onOpenGithub={() => setIsGithubOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -120,6 +123,7 @@ export default function App() {
           setIsAuditOpen(true);
         }}
         onOpenConfig={() => setIsConfigOpen(true)}
+        onOpenGithub={() => setIsGithubOpen(true)}
       />
 
       {/* Modals */}
@@ -143,6 +147,11 @@ export default function App() {
         isOpen={isAuditOpen}
         onClose={() => setIsAuditOpen(false)}
         selectedRoll={selectedAuditRoll}
+      />
+
+      <GithubModal
+        isOpen={isGithubOpen}
+        onClose={() => setIsGithubOpen(false)}
       />
     </div>
   );
