@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Table, Upload, Play, Shuffle, Check, FileText, Trash2, ArrowRight } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Table, Upload, Play, Shuffle, Check, FileText, Trash2, ArrowRight, Square } from 'lucide-react';
 import { sampleCryptographicInt } from '../utils/quantumRng';
 import { playQuantumTick, playQuantumSnap } from '../utils/audio';
 
@@ -23,10 +23,79 @@ export const ImportPoolScreen: React.FC<ImportPoolScreenProps> = ({ audioEnabled
   const [withReplacement, setWithReplacement] = useState<boolean>(false);
   const [selectedWinners, setSelectedWinners] = useState<string[]>([]);
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
+  const [isRunningContinuous, setIsRunningContinuous] = useState<boolean>(false);
+  const runTimerRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleDraw = () => {
-    if (items.length === 0 || isDrawing) return;
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => {
+      if (runTimerRef.current) {
+        clearInterval(runTimerRef.current);
+      }
+    };
+  }, []);
+
+  const finalizeDraw = () => {
+    const pool = [...items];
+    const finalPick: string[] = [];
+    for (let i = 0; i < Math.min(sampleCount, pool.length); i++) {
+      const idx = sampleCryptographicInt(0, pool.length - 1);
+      finalPick.push(pool[idx]);
+      if (!withReplacement) {
+        pool.splice(idx, 1);
+      }
+    }
+    setSelectedWinners(finalPick);
+    setIsDrawing(false);
+    setIsRunningContinuous(false);
+    if (audioEnabled) playQuantumSnap(600);
+  };
+
+  // Continuous run until click stop handler
+  const handleToggleRunContinuous = () => {
+    if (items.length === 0) return;
+
+    if (isRunningContinuous) {
+      // STOP: Halt continuous running and lock on final true quantum random choice
+      if (runTimerRef.current) {
+        clearInterval(runTimerRef.current);
+        runTimerRef.current = null;
+      }
+      finalizeDraw();
+    } else {
+      // START: Begin continuous running until user clicks stop
+      setIsRunningContinuous(true);
+      setIsDrawing(true);
+
+      if (audioEnabled) {
+        playQuantumTick(880);
+      }
+
+      let step = 0;
+      runTimerRef.current = setInterval(() => {
+        step++;
+        const tempPick: string[] = [];
+        const pool = [...items];
+        for (let i = 0; i < Math.min(sampleCount, pool.length); i++) {
+          const idx = sampleCryptographicInt(0, pool.length - 1);
+          tempPick.push(pool[idx]);
+          if (!withReplacement) {
+            pool.splice(idx, 1);
+          }
+        }
+        setSelectedWinners(tempPick);
+
+        if (audioEnabled && step % 3 === 0) {
+          playQuantumTick(780 + (step % 8) * 30);
+        }
+      }, 40);
+    }
+  };
+
+  // 1x Instant Sample Handler
+  const handleInstantDraw = () => {
+    if (items.length === 0 || isDrawing || isRunningContinuous) return;
     setIsDrawing(true);
 
     if (audioEnabled) {
@@ -53,19 +122,7 @@ export const ImportPoolScreen: React.FC<ImportPoolScreenProps> = ({ audioEnabled
 
       if (rolls >= 10) {
         clearInterval(interval);
-        // Final draw
-        const pool = [...items];
-        const finalPick: string[] = [];
-        for (let i = 0; i < Math.min(sampleCount, pool.length); i++) {
-          const idx = sampleCryptographicInt(0, pool.length - 1);
-          finalPick.push(pool[idx]);
-          if (!withReplacement) {
-            pool.splice(idx, 1);
-          }
-        }
-        setSelectedWinners(finalPick);
-        setIsDrawing(false);
-        if (audioEnabled) playQuantumSnap(600);
+        finalizeDraw();
       }
     }, 40);
   };
@@ -223,15 +280,57 @@ export const ImportPoolScreen: React.FC<ImportPoolScreenProps> = ({ audioEnabled
               </div>
             </div>
 
-            {/* Draw Button */}
+            {/* Draw Button: Run Until Click Stop */}
             <button
-              onClick={handleDraw}
-              disabled={items.length === 0 || isDrawing}
-              className="w-full py-3.5 rounded-xl bg-gradient-to-r from-[#8083ff] to-[#6366f1] hover:from-[#9093ff] hover:to-[#6f72f7] text-white font-space font-bold text-base flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(99,102,241,0.4)] transition-all cursor-pointer disabled:opacity-50"
+              onClick={handleToggleRunContinuous}
+              disabled={items.length === 0}
+              className={`w-full py-4 rounded-xl font-space font-bold text-base tracking-wide flex items-center justify-center gap-3 transition-all cursor-pointer shadow-xl active:scale-[0.99] border select-none group disabled:opacity-50 ${
+                isRunningContinuous
+                  ? 'bg-gradient-to-r from-[#ff3b5c] via-[#f43f5e] to-[#e11d48] hover:from-[#ff5270] hover:to-[#f43f5e] text-white shadow-[0_0_30px_rgba(244,63,94,0.65)] border-[#ff7088]/60 animate-pulse ring-2 ring-[#ff4d6d]/40'
+                  : 'bg-gradient-to-r from-[#8083ff] via-[#6e71f7] to-[#6366f1] hover:from-[#9295ff] hover:via-[#8083ff] hover:to-[#6f72f7] text-white shadow-[0_0_24px_rgba(99,102,241,0.45)] hover:shadow-[0_0_32px_rgba(128,131,255,0.65)] border-[#a5a7ff]/30'
+              }`}
             >
-              <Shuffle className={`w-4 h-4 ${isDrawing ? 'animate-spin' : ''}`} />
-              <span>SAMPLE FROM POOL (QUANTUM DRAW)</span>
+              <div
+                className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all ${
+                  isRunningContinuous
+                    ? 'bg-white/25 text-white scale-110 shadow-inner'
+                    : 'bg-white/20 text-white group-hover:rotate-45 transition-transform duration-300'
+                }`}
+              >
+                {isRunningContinuous ? (
+                  <Square className="w-3.5 h-3.5 fill-current animate-pulse" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                )}
+              </div>
+              <span className="tracking-wide text-sm sm:text-base font-extrabold uppercase">
+                {isRunningContinuous ? 'CLICK TO STOP & LOCK WINNERS' : 'RUN UNTIL CLICK STOP (QUANTUM DRAW)'}
+              </span>
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded border font-mono font-bold transition-all ${
+                  isRunningContinuous
+                    ? 'bg-black/50 border-white/40 text-white animate-pulse'
+                    : 'bg-black/30 border-white/20 text-[#dae2fd]'
+                }`}
+              >
+                {isRunningContinuous ? 'STOP' : 'RUN'}
+              </span>
             </button>
+
+            {/* Run mode status & instant draw option */}
+            <div className="flex items-center justify-between text-[11px] font-mono text-[#908fa0] px-1 pt-0.5">
+              <span className="flex items-center gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${isRunningContinuous ? 'bg-[#ff4d6d] animate-ping' : 'bg-[#4edea3]'}`} />
+                {isRunningContinuous ? 'Continuous pool scrambling active...' : 'Mode: Run until click stop'}
+              </span>
+              <button
+                onClick={handleInstantDraw}
+                disabled={items.length === 0 || isRunningContinuous}
+                className="hover:text-white text-[#c0c1ff] underline underline-offset-2 transition-colors cursor-pointer disabled:opacity-40"
+              >
+                or 1x instant sample
+              </button>
+            </div>
           </div>
         </div>
 
